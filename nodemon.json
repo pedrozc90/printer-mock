@@ -1,0 +1,20 @@
+{
+    "verbose": true,
+    "watch": [
+        "./src"
+    ],
+    "ext": "ts, env",
+    "ignore": [
+        "node_modules/**/*",
+        "dist/*",
+        "docs/*"
+    ],
+    "delay": "2500",
+    "env": {
+        "NODE_ENV": "development",
+        "SATO_PORT": 9100
+    },
+    "execMap": {
+        "ts": "node --inspect -r ts-node/register"
+    }
+}
