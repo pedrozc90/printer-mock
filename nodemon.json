@@ -9,12 +9,13 @@
         "dist/*",
         "docs/*"
     ],
-    "delay": "2500",
+    "delay": "300",
     "env": {
         "NODE_ENV": "development",
-        "SATO_PORT": 9100
+        "PORT": 9100,
+        "HOST": "127.0.0.1"
     },
     "execMap": {
-        "ts": "node --inspect -r ts-node/register"
+        "ts": "node --inspect=9101 -r ts-node/register"
     }
 }
