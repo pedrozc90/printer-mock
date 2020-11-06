@@ -1,77 +1,57 @@
-import { createServer, Socket } from "net";
+import { createServer, Server, Socket } from "net";
 import { getServerAddress } from "./utils/utils";
+import * as sato from "./sato";
 
 const port: number = parseInt(process.env.PORT || "9100");
+const host: string = process.env.HOST || "localhost";
 
-const server = createServer((socket: Socket) => {
+const pgpk_regexp = new RegExp(/.*[PG|PK]{2}.*/g);
+const ph_regexp = new RegExp(/.*PH.*/g);
+
+const server: Server = createServer((socket: Socket) => {
     // socket connection events
     console.log("client connected!");
 
+    const results: string[] = [];
+
     socket.on("data", (data: Buffer) => {
-        console.log("Received:", data.toString());
+        const content = data.toString("utf8");
 
-        const epcs = getSatoEPCs(data.toString("utf8"));
+        const epcs = sato.captureEpcs(content);
+        if (!epcs || !epcs.length) return;
 
-        sendEPC(socket, epcs, 0, 2000);
+        console.log("[DATA]", content);
+        
+        results.push(...epcs);
+
+        sato.sendEPC(socket, epcs, 0, 2000);
     });
 
-    socket.on("ready", () => console.log("connection is ready!"));
+    socket.on("ready", () => console.log("[SOCKET]", "[READY]", "connection is ready!"));
 
     socket.on("timeout", () => {
-        console.log("socket timeout: connection has been idle!");
+        console.log("[SOCKET]", "[TIMEOUT]", "connection has been idle!");
         socket.end();
     });
 
-    socket.on("end", () => console.warn("connection ended."));
+    socket.on("end", () => console.warn("[SOCKET]", "[END]", "connection ended."));
 
     socket.on("close", (had_error: boolean) => {
-        console.log((had_error) ?
+
+        console.log("Total Number of EPCs:", results.length);
+
+        results.splice(0, results.length);
+
+        console.log("[SOCKET]", "[CLOSE]", (had_error) ?
             "socket was closed due to a transmission error." :
             "socket successfully closed.");
     });
 
-    socket.on("error", (err: Error) => console.error(`Socket Error - ${err.name}: ${err.message}`, err.stack));
+    socket.on("error", (e: Error) => console.error("[SOCKET]", "[ERROR]", `${ e.name }: ${ e.message }`, e.stack));
 });
 
 // server events
-server.on("close", () => console.log("connection closed!"));
-server.on("error", (err: Error) => console.error(`Server Error - ${err.name}: ${err.message}`, err.stack));
+server.on("close", () => console.log("[SERVER]", "[CLOSE]", "connection closed!"));
+server.on("error", (e: Error) => console.error("[SERVER]", "[ERROR]", `${ e.name }: ${ e.message }`, e.stack));
 
-server.listen(port, "127.0.0.1", () => console.log(`server is listening on ${ getServerAddress(server.address()) }`));
-
-function sendEPC(socket: Socket, epcs: string[], index: number, delay: number = 2000) {
-    setTimeout(() => {
-        const epc = epcs[index];
-        if (epc) {
-            send(socket, "EP:" + epc);
-            index++;
-            if (index < epcs.length) {
-                sendEPC(socket, epcs, index, 100);
-            } else {
-                // Finaliza a impressao
-                send(socket, ",PS0,");
-            }
-        }
-    }, delay);
-}
-
-function send(socket: Socket, message: string): void {
-    console.log("Send: " + message);
-    socket.write("\u0002" + message + "\u0003\n");
-}
-
-function getSatoEPCs(data: string): string[] {
-    //F1+1,8,0,1IP0e:h,epc:${epc},fsw:0;
-    const epcRgex = /[epc:]([a-zA-Z0-9]+)[,]/g;
-
-    const matches = [];
-
-    let match;
-    while ((match = epcRgex.exec(data)) !== null) {
-        if (match[1] != "h") {
-            matches.push(match[1]);
-        }
-    }
-
-    return matches;
-}
+server.listen(port, host, () => console.log("[SERVER]", "[START]", `server is listening on ${ getServerAddress(server.address()) }`));
