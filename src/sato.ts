@@ -1,10 +1,10 @@
 import { Socket } from "net";
 
-export function sendEPC(socket: Socket, epcs: string[], index: number, delay: number = 2000) {
+export function sendEPC(socket: Socket, epcs: string[], index: number = 0, delay: number = 2000) {
     setTimeout(() => {
         const epc = epcs[index++];
         if (epc) {
-            send(socket, `EP:${epc}`);
+            send(socket, `EP:${ epc }`);
             if (index < epcs.length) {
                 sendEPC(socket, epcs, index, 100);
             } else {

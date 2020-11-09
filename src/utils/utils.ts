@@ -12,8 +12,10 @@ export function normalizeInt(value?: string): number | undefined {
     return result;
 }
 
-export function getServerAddress(info: AddressInfo | string | null): string | null {
-    if (!info) return null;
+export function formatAddress(info: AddressInfo | string | null): string {
+    if (!info) {
+        throw new Error("Address not found.");
+    };
     return typeof info === "string" ? info : `${info.address}:${info.port}`;
 }
 

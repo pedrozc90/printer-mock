@@ -1,15 +1,18 @@
 import { createServer, Server, Socket } from "net";
-import { getServerAddress } from "./utils/utils";
-import * as sato from "./sato";
 
-const port: number = parseInt(process.env.PORT || "9100");
-const host: string = process.env.HOST || "localhost";
+import { formatAddress } from "./utils";
+import { ServerError } from "./types";
 
-const pgpk_regexp = new RegExp(/.*[PG|PK]{2}.*/g);
-const ph_regexp = new RegExp(/.*PH.*/g);
+import * as Sato from "./sato";
+
+const PORT: number = parseInt(process.env.PORT || "9100");
+const HOST: string = process.env.HOST || "localhost";
+
+const PGPK_REGEXP = new RegExp(/.*[PG|PK]{2}.*/g);
+const PH_REGEXP = new RegExp(/.*PH.*/g);
 
 const server: Server = createServer((socket: Socket) => {
-    // socket connection events
+    // socket connection event
     console.log("client connected!");
 
     const results: string[] = [];
@@ -17,24 +20,28 @@ const server: Server = createServer((socket: Socket) => {
     socket.on("data", (data: Buffer) => {
         const content = data.toString("utf8");
 
-        const epcs = sato.captureEpcs(content);
+        const epcs = Sato.captureEpcs(content);
         if (!epcs || !epcs.length) return;
 
         console.log("[DATA]", content);
         
         results.push(...epcs);
 
-        sato.sendEPC(socket, epcs, 0, 2000);
+        Sato.sendEPC(socket, epcs);
     });
 
-    socket.on("ready", () => console.log("[SOCKET]", "[READY]", "connection is ready!"));
+    socket.on("ready", () => {
+        console.log("connection is ready!");
+    });
 
     socket.on("timeout", () => {
-        console.log("[SOCKET]", "[TIMEOUT]", "connection has been idle!");
+        console.warn("socket timeout");
         socket.end();
     });
 
-    socket.on("end", () => console.warn("[SOCKET]", "[END]", "connection ended."));
+    socket.on("end", () => {
+        console.log("client disconnected.");
+    });
 
     socket.on("close", (had_error: boolean) => {
 
@@ -47,11 +54,25 @@ const server: Server = createServer((socket: Socket) => {
             "socket successfully closed.");
     });
 
-    socket.on("error", (e: Error) => console.error("[SOCKET]", "[ERROR]", `${ e.name }: ${ e.message }`, e.stack));
+    socket.on("error", (err: Error) => {
+        console.error("[ERROR]", `${ err.name }: ${ err.message }`, err.stack);
+    });
 });
 
 // server events
 server.on("close", () => console.log("[SERVER]", "[CLOSE]", "connection closed!"));
-server.on("error", (e: Error) => console.error("[SERVER]", "[ERROR]", `${ e.name }: ${ e.message }`, e.stack));
+server.on("error", (err: ServerError) => {
+    if (err.code === "EADDRINUSE") {
+        console.error(`Address ${ err.address }:${ err.port } in use, closing server...`);
+        server.close();
+        process.exit(1);
+    } else {
+        console.error(err);
+        console.error("[SERVER]", "[ERROR]", `${ err.name }: ${ err.message }`, err.stack);
+    }
+});
 
-server.listen(port, host, () => console.log("[SERVER]", "[START]", `server is listening on ${ getServerAddress(server.address()) }`));
+server.listen(PORT, HOST, () => {
+    const address = formatAddress(server.address());
+    console.log("server is listening on", address);
+});
