@@ -1,4 +1,5 @@
 # npm packages
 node_modules
 dist
-logs
+logs/*
+epcs/*

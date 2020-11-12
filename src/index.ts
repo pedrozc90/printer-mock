@@ -1,21 +1,23 @@
 import { createServer, Server, Socket } from "net";
 
-import { formatAddress } from "./utils";
+import { createDirectory, formatAddress, writeContentFile, writeEpcFile } from "./utils";
 import { ServerError } from "./types";
 
 import * as Sato from "./sato";
 
+import path from "path";
+
 const PORT: number = parseInt(process.env.PORT || "9100");
 const HOST: string = process.env.HOST || "localhost";
+const ROOT_DIR: string = path.join(__dirname, "../logs");
 
-const PGPK_REGEXP = new RegExp(/.*[PG|PK]{2}.*/g);
-const PH_REGEXP = new RegExp(/.*PH.*/g);
+createDirectory(ROOT_DIR);
 
 const server: Server = createServer((socket: Socket) => {
     // socket connection event
     console.log("client connected!");
 
-    const results: string[] = [];
+    const receivedData: { content: string, epcs: string[] }[] = [];
 
     socket.on("data", (data: Buffer) => {
         const content = data.toString("utf8");
@@ -23,9 +25,9 @@ const server: Server = createServer((socket: Socket) => {
         const epcs = Sato.captureEpcs(content);
         if (!epcs || !epcs.length) return;
 
-        console.log("[DATA]", content);
+        console.info("[DATA]", content);
         
-        results.push(...epcs);
+        receivedData.push({ content, epcs });
 
         Sato.sendEPC(socket, epcs);
     });
@@ -44,12 +46,21 @@ const server: Server = createServer((socket: Socket) => {
     });
 
     socket.on("close", (had_error: boolean) => {
+        if (receivedData.length > 0) {
+            const epcs = receivedData.map((v) => v.epcs).flat();
+            const content = receivedData.map((v) => v.content).flat().join("\n\n");
 
-        console.log("Total Number of EPCs:", results.length);
+            console.info("total number of epcs:", epcs.length);
 
-        results.splice(0, results.length);
+            const now = (new Date()).toISOString().replace("T","-").replace(":", "-");
+            writeEpcFile(path.join(ROOT_DIR, `epcs-${ now }.txt`), epcs);
+            writeContentFile(path.join(ROOT_DIR, `content-${ now }.txt`), content);
 
-        console.log("[SOCKET]", "[CLOSE]", (had_error) ?
+            // clear result list
+            receivedData.splice(0, receivedData.length);
+        }
+
+        console.log((had_error) ?
             "socket was closed due to a transmission error." :
             "socket successfully closed.");
     });

@@ -1,5 +1,16 @@
 import { Socket } from "net";
 
+const PGPK_REGEXP = new RegExp(/.*[PG|PK]{2}.*/g);
+const PH_REGEXP = new RegExp(/.*PH.*/g);
+
+export function isPKPGCommand(cmd: string): boolean {
+    return PGPK_REGEXP.test(cmd);
+}
+
+export function isPHCommand(cmd: string): boolean {
+    return PH_REGEXP.test(cmd);
+}
+
 export function sendEPC(socket: Socket, epcs: string[], index: number = 0, delay: number = 2000) {
     setTimeout(() => {
         const epc = epcs[index++];
