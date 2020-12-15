@@ -47,3 +47,11 @@ export function onError(server: Server): (error: any) => void {
         }
     }
 }
+
+/**
+ * Verify if a value exists.
+ * @param t                                 -- data.
+ */
+export function isNotEmpty<T>(t: T | undefined | null): t is T {
+    return !!t;
+}

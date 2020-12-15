@@ -1,7 +1,7 @@
 import { createServer, Server, Socket } from "net";
 
-import { createDirectory, formatAddress, writeContentFile, writeEpcFile } from "./utils";
-import { ServerError } from "./types";
+import { createDirectory, formatAddress, writeContentFile, writeEpcFile, isNotEmpty, writeTagFile } from "./utils";
+import { ReceivedData, ServerError, Tag } from "./types";
 
 import * as Sato from "./sato";
 
@@ -17,19 +17,19 @@ const server: Server = createServer((socket: Socket) => {
     // socket connection event
     console.log("client connected!");
 
-    const receivedData: { content: string, epcs: string[] }[] = [];
+    const receivedData: ReceivedData[] = [];
 
     socket.on("data", (data: Buffer) => {
         const content = data.toString("utf8");
 
-        const epcs = Sato.captureEpcs(content);
+        const epcs = Sato.captureAllEpcs(content);
         if (!epcs || !epcs.length) return;
 
         console.info("[DATA]", content);
+        Sato.sendEPC(socket, epcs);
+
         
         receivedData.push({ content, epcs });
-
-        Sato.sendEPC(socket, epcs);
     });
 
     socket.on("ready", () => {
@@ -47,14 +47,35 @@ const server: Server = createServer((socket: Socket) => {
 
     socket.on("close", (had_error: boolean) => {
         if (receivedData.length > 0) {
-            const epcs = receivedData.map((v) => v.epcs).flat();
+            const epcs = receivedData.map((v) => v.epcs).filter(isNotEmpty).flat();
             const content = receivedData.map((v) => v.content).flat().join("\n\n");
+            
+            const tags: Tag[] = content.split("U,01")
+                .map((v) => Sato.captureInfo(v))
+                .filter(isNotEmpty);
 
-            console.info("total number of epcs:", epcs.length);
+            let total = 0;
+            let table: { size: string, quantity: number }[] = [];
+            const tagsBySize = tags.reduce((map: Map<string, string[]>, v: Tag) => {
+                const size = v.size;
+                if (size && v.epc) {
+                    map.set(size, [ ...map.get(size) || [], v.epc ]);
+                }
+                return map;
+            }, new Map<string, string[]>()).forEach((v: string[], k: string) => {
+                const quantity = v.filter((v, index, self) => index === self.indexOf(v)).length;
+                table.push({ size: k, quantity });
+            });
 
-            const now = (new Date()).toISOString().replace("T","-").replace(":", "-");
+            table.push({ size: "Uniques", quantity: table.map((v) => v.quantity).reduce((r, v) => r + v, 0) });
+            table.push({ size: "All", quantity: epcs.length });
+            
+            console.table(table, [ "size", "quantity" ]);
+
+            const now = (new Date()).toISOString().replace("T","-").replace(":", "-").replace("Z", "");
             writeEpcFile(path.join(ROOT_DIR, `epcs-${ now }.txt`), epcs);
             writeContentFile(path.join(ROOT_DIR, `content-${ now }.txt`), content);
+            writeTagFile(path.join(ROOT_DIR, `tags-${ now }.txt`), tags);
 
             // clear result list
             receivedData.splice(0, receivedData.length);
