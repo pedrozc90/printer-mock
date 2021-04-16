@@ -5,7 +5,9 @@
     "main": "dist/index.js",
     "scripts": {
         "start": "nodemon src/index.ts",
-        "start:prod": "cross-env NODE_ENV=production node dist/index.js"
+        "start:node2": "nodemon --config nodemon.node2.json src/index.ts",
+        "start:prod": "cross-env NODE_ENV=production node dist/index.js",
+        "clear": "find ./logs -type f -iname '*.txt' -delete"
     },
     "keywords": [
         "nodejs",
