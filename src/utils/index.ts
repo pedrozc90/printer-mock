@@ -1,3 +1,4 @@
 export * from "./utils";
 export * from "./files";
-export * from "./ASCIIUtils";
+export * from "./ascii";
+export * from "./string";

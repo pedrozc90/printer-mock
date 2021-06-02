@@ -1,18 +1,17 @@
 import { createServer, Server, Socket } from "net";
 
-import { createDirectory, formatAddress, ETX } from "./utils";
+import { createDirectory, formatAddress, ETX, STX, EMPTY, notEmpty } from "./utils";
 import { ReceivedData, ServerError } from "./types";
 
 import * as Sato from "./sato";
 
 import path from "path";
-import { BatteryStatus, BufferStatus, ErrorNumber, MediaStatus, PrinterStatus, RibbonStatus } from "./sato/enums";
 
 const PORT: number = parseInt(process.env.PORT || "9100");
 const HOST: string = process.env.HOST || "localhost";
 const ROOT_DIR: string = path.join(__dirname, "../logs");
 
-const buffer: string[] = [];
+const buffer: string[] = [ "PEDRO" ];
 const list_of_epcs: string[] = [];
 const options = {
     printer_status: false,
@@ -25,13 +24,17 @@ let counter: number = 0;
 
 createDirectory(ROOT_DIR);
 
-function manipulated_error(buffer: string[], attempts: number) {
-    // if (buffer.length == 20) {
-    //     console.log("ERROR");
-    //     return true;
-    // }
-    // return true;
-    return attempts > 5;
+function mislead(buffer: string[], attempts: number) {
+    return false;
+}
+
+function printAscII(content: string): void {
+    const tmp = content.split(EMPTY).map((char) => {
+        const code = char.charCodeAt(0);
+        return { char, code };
+    });
+
+    console.table(tmp, [ "char", "code" ]);
 }
 
 const server: Server = createServer((socket: Socket) => {
@@ -43,73 +46,91 @@ const server: Server = createServer((socket: Socket) => {
     socket.on("data", async (data: Buffer) => {
         
         const content = data.toString("utf8");
-        console.log("data:", content);
+        
+        // const isLabelFile: boolean = (Sato.captureAllEpcs(content) || []).length > 0;
+        // if (!isLabelFile) {
+        //     console.log("data:", content);
+        // }
 
-        const lines: string[] = content.split(ETX)
-            .filter((v) => v.length !== 0)
-            .map((v) => v.concat(ETX));
+        const lines: string[] = content.replace(/[\n|\r]/g, "").split(ETX)
+            .map((v) => `${STX}${v}${ETX}`)
+            .filter(notEmpty);
 
         for (const line of lines) {
             const start = Date.now();
-            let printer_status: PrinterStatus | undefined;
-            let buffer_status: BufferStatus | undefined;
-            let ribbon_status: RibbonStatus | undefined;
-            let media_status: MediaStatus | undefined;
-            let error_number: ErrorNumber | undefined;
-            let battery_status: BatteryStatus | undefined;
+
+            let printer_status: Sato.PrinterStatus | undefined;
+            let buffer_status: Sato.BufferStatus | undefined;
+            let ribbon_status: Sato.RibbonStatus | undefined;
+            let media_status: Sato.MediaStatus | undefined;
+            let error_number: Sato.ErrorNumber | undefined;
+            let battery_status: Sato.BatteryStatus | undefined;
             let remaining: number = (buffer.length > 0) && 1 || 0;
-            let epc: string | undefined;
 
-            if (!line || line.length == 0) {
-                return;
+            let epc: string | undefined = Sato.captureEpc(line);
+            if (epc) {
+                console.log(`pushing epc ${epc} into the buffer.`);
+                buffer.push(epc);
+                epc = undefined;
             }
 
-            if (manipulated_error(buffer, attempts)) {
-                printer_status = PrinterStatus.PRITING;
-                buffer_status = BufferStatus.BUFFER_FULL;
-                ribbon_status = RibbonStatus.NO_RIBBON;
-                error_number = ErrorNumber.OFFLINE;
-            }
-            // cancel command
-            else if (Sato.isHCommand(line)) {
-                options.pause = true;
+            // force any kind of error
+            if (mislead(buffer, attempts)) {
+                printer_status = Sato.PrinterStatus.PRITING;
+                buffer_status = Sato.BufferStatus.BUFFER_FULL;
+                ribbon_status = Sato.RibbonStatus.NO_RIBBON;
+                error_number = Sato.ErrorNumber.OFFLINE;
             }
             // cancel command
             else if (Sato.isPHCommand(line)) {
-                break;
+                console.log("CANCEL COMMAND");
+                buffer.splice(0, buffer.length);
             }
-            // printer status command
-            else if (Sato.isPGCommand(line) || Sato.isPKCommand(line) || Sato.isPKPGCommand(line)) {
-                if (Sato.isPGCommand(line)) {
-                    options.printer_status = true;
-                } else if (Sato.isPKCommand(line)) {
-                    options.rfid_tag = true;
-                } else {
-                    options.printer_status = true;
-                    options.rfid_tag = true;
-                }
+            // pg command
+            else if (Sato.isPGCommand(line)) {
+                console.log("PG COMMAND");
+                options.printer_status = true;
+            }
+            // pk command
+            else if (Sato.isPKCommand(line)) {
+                console.log("PK COMMAND");
+                options.rfid_tag = true;
+            }
+            // pgpk command
+            else if (Sato.isPKPGCommand(line)) {
+                console.log("PGPK COMMAND");
+                options.printer_status = true;
+                options.rfid_tag = true;
+            }
+            else if (!epc) {
+                await Sato.delay(100);
+                continue;
+            }
 
-
-                if (options.printer_status && options.rfid_tag && buffer.length > 0) {
-                    printer_status = PrinterStatus.PRITING;
+            if (options.printer_status && options.rfid_tag) {
+                if (buffer.length > 0 && attempts >= 5) {
+                    printer_status = Sato.PrinterStatus.PRITING;
                     
                     epc = buffer.pop();
-
                     if (epc) {
                         options.printer_status = false;
                         options.rfid_tag = false;
-                    }
-                }
-            }
-            // file
-            else {
-                const epcs = Sato.captureAllEpcs(line);
 
-                console.log("number of epcs:", epcs?.length || 0);
-                if (epcs) {
-                    printer_status = PrinterStatus.ANALYSING;
-                    buffer.push(...epcs);
+                        list_of_epcs.push(epc);
+                    }
+
+                    attempts = 0;
+                } else {
+                    printer_status = Sato.PrinterStatus.STANDBY;
                 }
+
+                attempts += 1;
+            }
+
+            if (buffer.length == 0) {
+                printer_status = Sato.PrinterStatus.STANDBY;
+            } else {
+                printer_status = Sato.PrinterStatus.ANALYSING;
             }
 
             const params = {
@@ -128,10 +149,10 @@ const server: Server = createServer((socket: Socket) => {
 
             Sato.send(socket, message, 1000);
 
-            console.log("elapsed time:", Date.now() - start);
+            console.log("attempts:", attempts, "buffer size:", buffer.length, "elapsed time:", Date.now() - start);
         };
 
-        attempts += 1;
+        await Sato.delay(100);
     });
 
     socket.on("ready", () => {
@@ -189,7 +210,7 @@ const server: Server = createServer((socket: Socket) => {
     });
 
     socket.on("error", (err: Error) => {
-        console.error("[ERROR]", `${ err.name }: ${ err.message }`, err.stack);
+        console.error(`${ err.name }: ${ err.message }`, err.stack);
     });
 });
 
@@ -202,7 +223,7 @@ server.on("error", (err: ServerError) => {
         process.exit(1);
     } else {
         console.error(err);
-        console.error("[SERVER]", "[ERROR]", `${ err.name }: ${ err.message }`, err.stack);
+        console.error(`${ err.name }: ${ err.message }`, err.stack);
     }
 });
 
