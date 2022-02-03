@@ -1,3 +1,6 @@
+// REFERENCES:
+// https://honeywellaidc.force.com/supportppr/s/article/What-do-Control-Characters-SOH-STX-etc-mean-when-scanning
+
 export const NUL = String.fromCharCode(0);                  // null
 export const SOH = String.fromCharCode(1);                  // start of heading
 export const STX = String.fromCharCode(2);                  // start of text
@@ -32,6 +35,8 @@ export const RS  = String.fromCharCode(30);                 // record separator
 export const US  = String.fromCharCode(31);                 // unit separator
 export const SPACE = String.fromCharCode(32);               // " " - sapce
 
+export const U_10 = String.fromCharCode(10);
+export const U_11 = String.fromCharCode(11);
 export const U_12 = String.fromCharCode(12);
 export const U_18 = String.fromCharCode(18);
 export const REPLACEMENT = String.fromCharCode(65533);      // "�" - replacement character
@@ -43,4 +48,11 @@ export function sanitize(data: Buffer): string {
     return data.toString("utf8").split(EMPTY)
         .filter((v) => !useless.includes(v))
         .join(EMPTY);
+}
+
+export function cleanTextContent(text: string): string {
+    return text.replace("[^\\x00-\\x7F]", "")   // strips off all non-ASCII characters
+        .replace("[\\p{Cntrl}&&[^\r\n\t]]", "") // erases all the ASCII control characters
+        .replace("\\p{C}", "")                  // removes non-printable characters from Unicode
+        .trim();
 }

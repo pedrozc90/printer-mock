@@ -1,6 +1,6 @@
 import { createServer, Server, Socket } from "net";
 
-import { createDirectory, formatAddress, ETX, STX, EMPTY, notEmpty } from "./utils";
+import { createDirectory, formatAddress, ETX, STX, EMPTY, notEmpty, REPLACEMENT, NUL, ENQ } from "./utils";
 import { ReceivedData, ServerError } from "./types";
 
 import * as Sato from "./sato";
@@ -24,8 +24,11 @@ let counter: number = 0;
 
 createDirectory(ROOT_DIR);
 
-function mislead(buffer: string[], attempts: number) {
-    return false;
+function mislead(buffer: string[] = [], attempts: number) {
+    // console.log("MISLEAD", buffer.length, attempts);
+    // return buffer.length > 15;
+    const b = true;
+    return !b;
 }
 
 function printAscII(content: string): void {
@@ -46,17 +49,20 @@ const server: Server = createServer((socket: Socket) => {
     socket.on("data", async (data: Buffer) => {
         
         const content = data.toString("utf8");
-        
-        // const isLabelFile: boolean = (Sato.captureAllEpcs(content) || []).length > 0;
-        // if (!isLabelFile) {
-        //     console.log("data:", content);
-        // }
 
-        const lines: string[] = content.replace(/[\n|\r]/g, "").split(ETX)
-            .map((v) => `${STX}${v}${ETX}`)
+        const lines: string[] = content.replace(/[\n|\r]/g, "") // remove CR and LF
+            .replace(/\ufffd/gu, "")                           // remove 65533 character
+            .replace(/\u{0000}/gu, "")                          // remove 0000 (NUL) character.
+            .split(/[\u{0002}|\u{0003}]/gu)                     // split string by start of text (STX) and end of text (ETX)
+            .map((v) => {
+                const s = v.replace(/(\u{0005}t\u{0001}|\u{0005}t|t\u{0001})/gu, "");
+                if (s.length === 0) return null;
+                return `${STX}${s}${ETX}`
+            })
             .filter(notEmpty);
 
         for (const line of lines) {
+
             const start = Date.now();
 
             let printer_status: Sato.PrinterStatus | undefined;
@@ -76,15 +82,43 @@ const server: Server = createServer((socket: Socket) => {
 
             // force any kind of error
             if (mislead(buffer, attempts)) {
-                printer_status = Sato.PrinterStatus.PRITING;
+                printer_status = Sato.PrinterStatus.STANDBY;
                 buffer_status = Sato.BufferStatus.BUFFER_FULL;
                 ribbon_status = Sato.RibbonStatus.NO_RIBBON;
                 error_number = Sato.ErrorNumber.OFFLINE;
+
+                const params = {
+                    printer_status,
+                    buffer_status,
+                    ribbon_status,
+                    media_status,
+                    error_number,
+                    battery_status,
+                    remaining,
+                    // epc,
+                    epc: undefined,
+                    tid: (epc) && list_of_epcs.length || undefined 
+                };
+    
+                const message = Sato.message(params);
+    
+                Sato.send(socket, message, 1000);
+                return;
             }
             // cancel command
             else if (Sato.isPHCommand(line)) {
                 console.log("CANCEL COMMAND");
                 buffer.splice(0, buffer.length);
+            }
+            // pause command
+            else if (Sato.isHPauseCommand(line)) {
+                console.log("PAUSE COMMAND");
+                options.pause = true;
+            }
+            // resume command
+            else if (Sato.isHResumeCommand(line)) {
+                console.log("RESUME COMMAND");
+                options.pause = false;
             }
             // pg command
             else if (Sato.isPGCommand(line)) {
@@ -107,7 +141,7 @@ const server: Server = createServer((socket: Socket) => {
                 continue;
             }
 
-            if (options.printer_status && options.rfid_tag) {
+            if (!options.pause && options.printer_status && options.rfid_tag) {
                 if (buffer.length > 0 && attempts >= 5) {
                     printer_status = Sato.PrinterStatus.PRITING;
                     
@@ -127,7 +161,9 @@ const server: Server = createServer((socket: Socket) => {
                 attempts += 1;
             }
 
-            if (buffer.length == 0) {
+            if (options.pause) {
+                printer_status = Sato.PrinterStatus.WAITING;
+            } else if (buffer.length == 0) {
                 printer_status = Sato.PrinterStatus.STANDBY;
             } else {
                 printer_status = Sato.PrinterStatus.ANALYSING;
@@ -149,7 +185,9 @@ const server: Server = createServer((socket: Socket) => {
 
             Sato.send(socket, message, 1000);
 
-            console.log("attempts:", attempts, "buffer size:", buffer.length, "elapsed time:", Date.now() - start);
+            const elapsed = Date.now() - start;
+
+            console.log("attempts:", attempts, "buffer size:", buffer.length, "elapsed time:", elapsed);
         };
 
         await Sato.delay(100);
