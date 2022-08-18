@@ -1,4 +1,4 @@
 export * from "./utils";
-export * from "./files";
 export * from "./ascii";
 export * from "./string";
+export * as BufferUtils from "./buffer";

@@ -1,196 +1,110 @@
 import { createServer, Server, Socket } from "net";
 
-import { createDirectory, formatAddress, ETX, STX, EMPTY, notEmpty, REPLACEMENT, NUL, ENQ } from "./utils";
-import { ReceivedData, ServerError } from "./types";
-
+import { formatAddress, BufferUtils } from "./utils";
+import { ServerError } from "./types";
+import { PrinterStatus } from "./sato";
 import * as Sato from "./sato";
-
-import path from "path";
 
 const PORT: number = parseInt(process.env.PORT || "9100");
 const HOST: string = process.env.HOST || "localhost";
-const ROOT_DIR: string = path.join(__dirname, "../logs");
 
-const buffer: string[] = [ "PEDRO" ];
-const list_of_epcs: string[] = [];
-const options = {
-    printer_status: false,
-    rfid_tag: false,
-    pause: false
-};
+const COUNTER_LIMIT: number = 4;
 
-let attempts: number = 0;
+const buffer: string[] = [];
+let paused: boolean = false;
 let counter: number = 0;
+let analysing: boolean = false;
 
-createDirectory(ROOT_DIR);
-
-function mislead(buffer: string[] = [], attempts: number) {
-    // console.log("MISLEAD", buffer.length, attempts);
-    // return buffer.length > 15;
-    const b = true;
-    return !b;
-}
-
-function printAscII(content: string): void {
-    const tmp = content.split(EMPTY).map((char) => {
-        const code = char.charCodeAt(0);
-        return { char, code };
-    });
-
-    console.table(tmp, [ "char", "code" ]);
+const reset: () => void = () => {
+    paused = false;
+    counter = 0;
+    analysing = false;
 }
 
 const server: Server = createServer((socket: Socket) => {
     // socket connection event
     console.log("client connected!");
 
-    const receivedData: ReceivedData[] = [];
-
     socket.on("data", async (data: Buffer) => {
-        
+        // convert buffer to string
         const content = data.toString("utf8");
+        console.log(content);
+        
+        const lines: string[] = BufferUtils.parse(data);
 
-        const lines: string[] = content.replace(/[\n|\r]/g, "") // remove CR and LF
-            .replace(/\ufffd/gu, "")                           // remove 65533 character
-            .replace(/\u{0000}/gu, "")                          // remove 0000 (NUL) character.
-            .split(/[\u{0002}|\u{0003}]/gu)                     // split string by start of text (STX) and end of text (ETX)
-            .map((v) => {
-                const s = v.replace(/(\u{0005}t\u{0001}|\u{0005}t|t\u{0001})/gu, "");
-                if (s.length === 0) return null;
-                return `${STX}${s}${ETX}`
-            })
-            .filter(notEmpty);
+        while (lines.length > 0) {
+            const line: string | undefined = lines.shift();
+            if (line === undefined) continue;
 
-        for (const line of lines) {
+            let printer_status: PrinterStatus = PrinterStatus.STANDBY;
+            let epc: string | undefined;
 
-            const start = Date.now();
-
-            let printer_status: Sato.PrinterStatus | undefined;
-            let buffer_status: Sato.BufferStatus | undefined;
-            let ribbon_status: Sato.RibbonStatus | undefined;
-            let media_status: Sato.MediaStatus | undefined;
-            let error_number: Sato.ErrorNumber | undefined;
-            let battery_status: Sato.BatteryStatus | undefined;
-            let remaining: number = (buffer.length > 0) && 1 || 0;
-
-            let epc: string | undefined = Sato.captureEpc(line);
-            if (epc) {
-                console.log(`pushing epc ${epc} into the buffer.`);
-                buffer.push(epc);
-                epc = undefined;
-            }
-
-            // force any kind of error
-            if (mislead(buffer, attempts)) {
-                printer_status = Sato.PrinterStatus.STANDBY;
-                buffer_status = Sato.BufferStatus.BUFFER_FULL;
-                ribbon_status = Sato.RibbonStatus.NO_RIBBON;
-                error_number = Sato.ErrorNumber.OFFLINE;
-
-                const params = {
-                    printer_status,
-                    buffer_status,
-                    ribbon_status,
-                    media_status,
-                    error_number,
-                    battery_status,
-                    remaining,
-                    // epc,
-                    epc: undefined,
-                    tid: (epc) && list_of_epcs.length || undefined 
-                };
-    
-                const message = Sato.message(params);
-    
-                Sato.send(socket, message, 1000);
-                return;
-            }
             // cancel command
-            else if (Sato.isPHCommand(line)) {
-                console.log("CANCEL COMMAND");
+            if (Sato.isPHCommand(line)) {
+                reset();
+                // clear epc buffer
                 buffer.splice(0, buffer.length);
             }
-            // pause command
-            else if (Sato.isHPauseCommand(line)) {
-                console.log("PAUSE COMMAND");
-                options.pause = true;
-            }
-            // resume command
+            // resume
             else if (Sato.isHResumeCommand(line)) {
-                console.log("RESUME COMMAND");
-                options.pause = false;
+                paused = false;
             }
-            // pg command
-            else if (Sato.isPGCommand(line)) {
-                console.log("PG COMMAND");
-                options.printer_status = true;
+            // pause
+            else if (Sato.isHPauseCommand(line)) {
+                paused = true;
             }
-            // pk command
             else if (Sato.isPKCommand(line)) {
-                console.log("PK COMMAND");
-                options.rfid_tag = true;
-            }
-            // pgpk command
-            else if (Sato.isPKPGCommand(line)) {
-                console.log("PGPK COMMAND");
-                options.printer_status = true;
-                options.rfid_tag = true;
-            }
-            else if (!epc) {
-                await Sato.delay(100);
-                continue;
-            }
-
-            if (!options.pause && options.printer_status && options.rfid_tag) {
-                if (buffer.length > 0 && attempts >= 5) {
-                    printer_status = Sato.PrinterStatus.PRITING;
-                    
-                    epc = buffer.pop();
-                    if (epc) {
-                        options.printer_status = false;
-                        options.rfid_tag = false;
-
-                        list_of_epcs.push(epc);
-                    }
-
-                    attempts = 0;
-                } else {
-                    printer_status = Sato.PrinterStatus.STANDBY;
+                counter++;
+                if (counter > COUNTER_LIMIT) {
+                    counter = 0;
                 }
-
-                attempts += 1;
+            }
+            else if (Sato.isPGCommand(line)) {
+                counter++;
+                if (counter > COUNTER_LIMIT) {
+                    counter = 0;
+                }
+            }
+            // return epc
+            else if (Sato.isPKPGCommand(line)) {
+                counter += 2;
+                if (counter > COUNTER_LIMIT) {
+                    counter = 0;
+                }
+            }
+            // others
+            else {
+                const epc = Sato.captureEpc(line);
+                if (epc) {
+                    buffer.push(epc);
+                }
             }
 
-            if (options.pause) {
-                printer_status = Sato.PrinterStatus.WAITING;
-            } else if (buffer.length == 0) {
-                printer_status = Sato.PrinterStatus.STANDBY;
-            } else {
-                printer_status = Sato.PrinterStatus.ANALYSING;
+            if (buffer.length > 0) {
+                if (paused) {
+                    printer_status = PrinterStatus.WAITING;
+                }
+                else if (analysing) {
+                    printer_status = PrinterStatus.ANALYSING;
+                }
+                else if (counter !== 0) {
+                    printer_status = PrinterStatus.PRITING;
+                }
+                
+                if (counter === COUNTER_LIMIT) {
+                    counter = 0;
+                    if (buffer.length > 0 && !analysing) {
+                        epc = buffer.shift();
+                    }
+                }
             }
 
-            const params = {
-                printer_status,
-                buffer_status,
-                ribbon_status,
-                media_status,
-                error_number,
-                battery_status,
-                remaining,
-                epc,
-                tid: (epc) && list_of_epcs.length || undefined 
-            };
+            const message: string = Sato.message({ printer_status, remaining: buffer.length, epc });
 
-            const message = Sato.message(params);
+            Sato.send(socket, message, 100);
+        }
 
-            Sato.send(socket, message, 1000);
-
-            const elapsed = Date.now() - start;
-
-            console.log("attempts:", attempts, "buffer size:", buffer.length, "elapsed time:", elapsed);
-        };
-
-        await Sato.delay(100);
+        analysing = false;
     });
 
     socket.on("ready", () => {
@@ -207,41 +121,7 @@ const server: Server = createServer((socket: Socket) => {
     });
 
     socket.on("close", (had_error: boolean) => {
-        if (receivedData.length > 0) {
-            // const epcs = receivedData.map((v) => v.epcs).filter(isNotEmpty).flat();
-            // const content = receivedData.map((v) => v.content).flat().join("\n\n");
-            
-            // const tags: Tag[] = content.split("U,01")
-            //     .map((v) => Sato.captureInfo(v))
-            //     .filter(isNotEmpty);
-
-            // let total = 0;
-            // let table: { size: string, quantity: number }[] = [];
-            // const tagsBySize = tags.reduce((map: Map<string, string[]>, v: Tag) => {
-            //     const size = v.size;
-            //     if (size && v.epc) {
-            //         map.set(size, [ ...map.get(size) || [], v.epc ]);
-            //     }
-            //     return map;
-            // }, new Map<string, string[]>()).forEach((v: string[], k: string) => {
-            //     const quantity = v.filter((v, index, self) => index === self.indexOf(v)).length;
-            //     table.push({ size: k, quantity });
-            // });
-
-            // table.push({ size: "Uniques", quantity: table.map((v) => v.quantity).reduce((r, v) => r + v, 0) });
-            // table.push({ size: "All", quantity: epcs.length });
-            
-            // console.table(table, [ "size", "quantity" ]);
-
-            // const now = (new Date()).toISOString().replace("T","-").replace(":", "-").replace("Z", "");
-            // writeEpcFile(path.join(ROOT_DIR, `epcs-${ now }.txt`), epcs);
-            // writeContentFile(path.join(ROOT_DIR, `content-${ now }.txt`), content);
-            // writeTagFile(path.join(ROOT_DIR, `tags-${ now }.txt`), tags);
-
-            // // clear result list
-            // receivedData.splice(0, receivedData.length);
-        }
-
+        reset();
         console.log((had_error) ?
             "socket was closed due to a transmission error." :
             "socket successfully closed.");

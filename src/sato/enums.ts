@@ -26,8 +26,8 @@ export enum MediaStatus {
 }
 
 export enum ErrorNumber {
-    ONLINE = 0,                                     // Not an error. Return is performed
-    OFFLINE = 1,                                    // Not an error. Return is performed
+    ONLINE = 0,                                     // not an error. return is performed
+    OFFLINE = 1,                                    // not an error. return is performed
     MACHINE_ERROR = 2,
     MEMORY_ERROR = 3,
     PROGRAM_ERROR = 4,
