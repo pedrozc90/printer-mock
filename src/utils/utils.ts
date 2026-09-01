@@ -1,57 +1,38 @@
-import { Server, type AddressInfo } from "net";
+import { randomBytes } from "node:crypto";
 
-export function normalizeInt(value?: string): number | undefined {
-    if (!value) return;
+export const toInt = (value: string | number | undefined): number | undefined => {
+    if (typeof value === "number") return value;
+    if (typeof value === "string") {
+        let result = parseInt(value);
+        if (isNaN(result)) return;
+        return result;
+    }
+    return undefined;
+};
 
-    let result: number = parseInt(value);
+export const resolvePort = (value: string | undefined, fallback: number = 3000): number => {
+    if (value === undefined) return fallback;
 
-    if (isNaN(result)) {
-        return;
+    const port: number | undefined = toInt(value);
+    if (port === undefined || port < 0 || port > 65535) {
+        throw new Error(`Invalid PORT value: ${value}`);
     }
 
-    return result;
-}
-
-export function formatAddress(info: AddressInfo | string | null): string {
-    if (!info) {
-        throw new Error("Address not found.");
-    }
-    return typeof info === "string" ? info : `${info.address}:${info.port}`;
-}
+    return port;
+};
 
 /**
- * Event listener for HTTP server "error" event.
- * @param error
+ * Generate a random TID.
+ *
+ * @param bytes - number of bytes
+ * @returns a random TID hexadecimal string, like 'E2A41B7C93D02F184A65B901'
  */
-export function onError(server: Server): (error: any) => void {
-    let info = server.address();
-    let port = !info ? "???" : typeof info === "string" ? info : info.port;
+export const generateTID = (bytes: number = 12): string => {
+    const tid = randomBytes(bytes);
 
-    return function (error: any): (error: any) => void {
-        if (error.syscall !== "listen") {
-            throw error;
-        }
+    // TID memory bank typically starts with an E2 manufacturer/chip identifier.
+    // EPCglobal / ISO 18000-63-style TID prefix
+    tid[0] = 0xe2;
 
-        // handle specific listen errors with friendly messages
-        switch (error.code) {
-            case "EACCES":
-                console.error(`Port ${port} requires elevated privileges`);
-                process.exit(1);
-            // break;
-            case "EADDRINUSE":
-                console.error(`Port ${port} is already in use`);
-                process.exit(1);
-            // break;
-            default:
-                throw error;
-        }
-    };
-}
-
-/**
- * Verify if a value exists.
- * @param t                                 -- data.
- */
-export function isNotEmpty<T>(t: T | undefined | null): t is T {
-    return !!t;
-}
+    return tid.toString("hex").toUpperCase();
+};

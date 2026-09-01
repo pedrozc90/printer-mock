@@ -1,3 +1,7 @@
+export interface Settings {
+    port: number;
+}
+
 export interface ServerError extends Error {
     name: string;
     message: string;

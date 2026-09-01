@@ -1,10 +1,12 @@
 import { createServer, Server, Socket } from "net";
 
-import { BufferUtils } from "./utils/index.ts";
-import { type ServerError } from "./types/types.ts";
+import { splitFrames } from "./utils/index.ts";
 import { PrinterStatus, Sato } from "./sato/index.ts";
 
 const COUNTER_LIMIT: number = 4;
+
+// cap on unterminated bytes held between data events before they are discarded
+const MAX_LEFTOVER: number = 1_000_000;
 
 export const createApp = (): Server => {
     const buffer: string[] = [];
@@ -16,31 +18,37 @@ export const createApp = (): Server => {
         paused = false;
         counter = 0;
         analysing = false;
+        buffer.splice(0, buffer.length);
     };
 
     const server: Server = createServer((socket: Socket) => {
         // socket connection event
         console.log("client connected!");
 
-        socket.on("data", async (data: Buffer) => {
-            // convert buffer to string
-            const content = data.toString("utf8");
-            console.log(content);
+        // bytes received but not yet terminated by ETX, carried into the next chunk
+        let leftover: Buffer = Buffer.alloc(0);
+        // serialize processing so awaited sends do not interleave across data events
+        let queue: Promise<void> = Promise.resolve();
 
-            const lines: string[] = BufferUtils.parse(data);
+        const handleData = async (data: Buffer): Promise<void> => {
+            const combined: Buffer = leftover.length > 0 ? Buffer.concat([leftover, data]) : data;
+            console.log(combined.toString("utf8"));
 
-            while (lines.length > 0) {
-                const line: string | undefined = lines.shift();
-                if (line === undefined) continue;
+            const { frames, rest } = splitFrames(combined);
+            if (rest.length > MAX_LEFTOVER) {
+                console.warn("discarding unterminated data: exceeded leftover limit");
+                leftover = Buffer.alloc(0);
+            } else {
+                leftover = rest;
+            }
 
+            for (const line of frames) {
                 let printer_status: PrinterStatus = PrinterStatus.STANDBY;
                 let epc: string | undefined;
 
                 // cancel command
                 if (Sato.isPHCommand(line)) {
                     reset();
-                    // clear epc buffer
-                    buffer.splice(0, buffer.length);
                 }
                 // resume
                 else if (Sato.isHResumeCommand(line)) {
@@ -98,10 +106,14 @@ export const createApp = (): Server => {
                     epc,
                 });
 
-                Sato.send(socket, message, 100);
+                await Sato.send(socket, message, 100);
             }
 
             analysing = false;
+        };
+
+        socket.on("data", (data: Buffer) => {
+            queue = queue.then(() => handleData(data)).catch((err: unknown) => console.error("error handling data:", err));
         });
 
         socket.on("ready", () => {
@@ -127,18 +139,11 @@ export const createApp = (): Server => {
         });
     });
 
+    // the mock simulates a single printer; reject any additional connection
+    server.maxConnections = 1;
+
     // server events
     server.on("close", () => console.log("[SERVER]", "[CLOSE]", "connection closed!"));
-    server.on("error", (err: ServerError) => {
-        if (err.code === "EADDRINUSE") {
-            console.error(`Address ${err.address}:${err.port} in use, closing server...`);
-            server.close();
-            process.exit(1);
-        } else {
-            console.error(err);
-            console.error(`${err.name}: ${err.message}`, err.stack);
-        }
-    });
 
     return server;
 };

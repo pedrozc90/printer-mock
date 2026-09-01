@@ -1,6 +1,8 @@
+import { Socket } from "net";
+import { settings } from "./config/index.ts";
 import { createApp } from "./app.ts";
 
-const port = parseInt(process.env["PORT"] ?? "3000");
+const { port } = settings;
 
 const app = createApp();
 
@@ -46,6 +48,15 @@ server.on("error", (error: Error) => {
     }
 });
 
+// track the active connection so shutdown can close it promptly
+let socket: Socket | undefined;
+server.on("connection", (s: Socket) => {
+    socket = s;
+    s.on("close", () => {
+        if (socket === s) socket = undefined;
+    });
+});
+
 let shuttingDown: boolean = false;
 
 const shutdown = async (signal: string): Promise<void> => {
@@ -62,7 +73,10 @@ const shutdown = async (signal: string): Promise<void> => {
     forceExitTimer.unref();
 
     try {
-        await Promise.all([new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())))]);
+        await new Promise<void>((resolve, reject) => {
+            server.close((err) => (err ? reject(err) : resolve()));
+            socket?.destroy();
+        });
 
         console.log("Shutdown complete");
         process.exit(0);
