@@ -1,151 +1,76 @@
-import { createServer, Server, Socket } from "net";
+import { createApp } from "./app.ts";
 
-import { formatAddress, BufferUtils } from "./utils";
-import { ServerError } from "./types";
-import { PrinterStatus } from "./sato";
-import * as Sato from "./sato";
+const port = parseInt(process.env["PORT"] ?? "3000");
 
-const PORT: number = parseInt(process.env.PORT || "9100");
-const HOST: string = process.env.HOST || "localhost";
+const app = createApp();
 
-const COUNTER_LIMIT: number = 4;
+const server = app.listen(port);
 
-const buffer: string[] = [];
-let paused: boolean = false;
-let counter: number = 0;
-let analysing: boolean = false;
+server.on("listening", () => {
+    if (!server.listening) return;
 
-const reset: () => void = () => {
-    paused = false;
-    counter = 0;
-    analysing = false;
-}
+    const addr = server.address();
+    console.log("Address:", addr);
 
-const server: Server = createServer((socket: Socket) => {
-    // socket connection event
-    console.log("client connected!");
+    const bind = addr ? (typeof addr === "string" ? `Pipe ${addr}` : `http://${addr.address}:${addr.port}`) : null;
 
-    socket.on("data", async (data: Buffer) => {
-        // convert buffer to string
-        const content = data.toString("utf8");
-        console.log(content);
-        
-        const lines: string[] = BufferUtils.parse(data);
-
-        while (lines.length > 0) {
-            const line: string | undefined = lines.shift();
-            if (line === undefined) continue;
-
-            let printer_status: PrinterStatus = PrinterStatus.STANDBY;
-            let epc: string | undefined;
-
-            // cancel command
-            if (Sato.isPHCommand(line)) {
-                reset();
-                // clear epc buffer
-                buffer.splice(0, buffer.length);
-            }
-            // resume
-            else if (Sato.isHResumeCommand(line)) {
-                paused = false;
-            }
-            // pause
-            else if (Sato.isHPauseCommand(line)) {
-                paused = true;
-            }
-            else if (Sato.isPKCommand(line)) {
-                counter++;
-                if (counter > COUNTER_LIMIT) {
-                    counter = 0;
-                }
-            }
-            else if (Sato.isPGCommand(line)) {
-                counter++;
-                if (counter > COUNTER_LIMIT) {
-                    counter = 0;
-                }
-            }
-            // return epc
-            else if (Sato.isPKPGCommand(line)) {
-                counter += 2;
-                if (counter > COUNTER_LIMIT) {
-                    counter = 0;
-                }
-            }
-            // others
-            else {
-                const epc = Sato.captureEpc(line);
-                if (epc) {
-                    buffer.push(epc);
-                }
-            }
-
-            if (buffer.length > 0) {
-                if (paused) {
-                    printer_status = PrinterStatus.WAITING;
-                }
-                else if (analysing) {
-                    printer_status = PrinterStatus.ANALYSING;
-                }
-                else if (counter !== 0) {
-                    printer_status = PrinterStatus.PRITING;
-                }
-                
-                if (counter === COUNTER_LIMIT) {
-                    counter = 0;
-                    if (buffer.length > 0 && !analysing) {
-                        epc = buffer.shift();
-                    }
-                }
-            }
-
-            const message: string = Sato.message({ printer_status, remaining: buffer.length, epc });
-
-            Sato.send(socket, message, 100);
-        }
-
-        analysing = false;
-    });
-
-    socket.on("ready", () => {
-        console.log("connection is ready!");
-    });
-
-    socket.on("timeout", () => {
-        console.warn("socket timeout");
-        socket.end();
-    });
-
-    socket.on("end", () => {
-        console.log("client disconnected.");
-    });
-
-    socket.on("close", (had_error: boolean) => {
-        reset();
-        console.log((had_error) ?
-            "socket was closed due to a transmission error." :
-            "socket successfully closed.");
-    });
-
-    socket.on("error", (err: Error) => {
-        console.error(`${ err.name }: ${ err.message }`, err.stack);
-    });
+    console.log("----------------------------------------------------------------------");
+    console.log(`Application running on ${bind}`);
+    console.log("To shut it down, press CTRL + C at any time.");
+    console.log("----------------------------------------------------------------------");
+    console.log(`Process PID: ${process.pid}`);
+    console.log("----------------------------------------------------------------------");
 });
 
-// server events
-server.on("close", () => console.log("[SERVER]", "[CLOSE]", "connection closed!"));
-server.on("error", (err: ServerError) => {
-    if (err.code === "EADDRINUSE") {
-        console.error(`Address ${ err.address }:${ err.port } in use, closing server...`);
-        server.close();
-        process.exit(1);
-    } else {
-        console.error(err);
-        console.error(`${ err.name }: ${ err.message }`, err.stack);
+server.on("error", (error: Error) => {
+    const syscall = "syscall" in error ? error.syscall : null;
+    if (syscall !== "listen") {
+        throw error;
+    }
+
+    const bind: string = typeof port === "string" ? "Pipe " + port : "Port " + port;
+    const code = "code" in error ? error.code : null;
+
+    // handle specific listen errors with friendly messages
+    switch (code) {
+        case "EACCES": {
+            console.error(bind + " requires elevated privileges");
+            return process.exit(1);
+        }
+        case "EADDRINUSE": {
+            console.error(bind + " is already in use");
+            return process.exit(1);
+        }
+        default:
+            throw error;
     }
 });
 
-server.listen(PORT, HOST, () => {
-    const address = formatAddress(server.address());
-    console.log("server is listening on", address);
-});
+let shuttingDown: boolean = false;
+
+const shutdown = async (signal: string): Promise<void> => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+
+    console.log(`${signal} received. Shutting down gracefully...`);
+
+    const forceExitTimer = setTimeout(() => {
+        console.log("Graceful shutdown timed out. Forcing exit.");
+        process.exit(1);
+    }, 10_000);
+
+    forceExitTimer.unref();
+
+    try {
+        await Promise.all([new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())))]);
+
+        console.log("Shutdown complete");
+        process.exit(0);
+    } catch (e) {
+        console.error("Error during shutdown:", e);
+        process.exit(1);
+    }
+};
+
+process.on("SIGINT", () => void shutdown("SIGINT"));
+process.on("SIGTERM", () => void shutdown("SIGTERM"));

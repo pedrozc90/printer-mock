@@ -1,4 +1,4 @@
-import { Server, AddressInfo } from "net";
+import { Server, type AddressInfo } from "net";
 
 export function normalizeInt(value?: string): number | undefined {
     if (!value) return;
@@ -15,7 +15,7 @@ export function normalizeInt(value?: string): number | undefined {
 export function formatAddress(info: AddressInfo | string | null): string {
     if (!info) {
         throw new Error("Address not found.");
-    };
+    }
     return typeof info === "string" ? info : `${info.address}:${info.port}`;
 }
 
@@ -25,9 +25,9 @@ export function formatAddress(info: AddressInfo | string | null): string {
  */
 export function onError(server: Server): (error: any) => void {
     let info = server.address();
-    let port = (!info) ? "???" : (typeof info === "string") ? info : info.port;
+    let port = !info ? "???" : typeof info === "string" ? info : info.port;
 
-    return function(error: any): (error: any) => void {
+    return function (error: any): (error: any) => void {
         if (error.syscall !== "listen") {
             throw error;
         }
@@ -37,15 +37,15 @@ export function onError(server: Server): (error: any) => void {
             case "EACCES":
                 console.error(`Port ${port} requires elevated privileges`);
                 process.exit(1);
-                // break;
+            // break;
             case "EADDRINUSE":
                 console.error(`Port ${port} is already in use`);
                 process.exit(1);
-                // break;
+            // break;
             default:
                 throw error;
         }
-    }
+    };
 }
 
 /**

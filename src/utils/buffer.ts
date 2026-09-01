@@ -1,9 +1,9 @@
-import { REPLACEMENT, sanitize } from "./ascii";
+import { sanitize } from "./ascii.ts";
 
 export const parse: (data: Buffer) => string[] = (data: Buffer) => {
     const result: string[] = [];
     let prev = 0;
-    for (const [ index, value ] of data.entries()) {
+    for (const [index, value] of data.entries()) {
         if (value === 2) {
             prev = index;
         }
@@ -13,7 +13,7 @@ export const parse: (data: Buffer) => string[] = (data: Buffer) => {
                 s = "\x02" + s;
             }
             const t = sanitize(s);
-            if (t !== '\x02\x03') {
+            if (t !== "\x02\x03") {
                 result.push(t);
             }
             prev = index + 1;
@@ -23,9 +23,9 @@ export const parse: (data: Buffer) => string[] = (data: Buffer) => {
 };
 
 export const print: (data: Buffer) => void = (data: Buffer) => {
-    const array: { code: number, character: string }[] = [];
+    const array: { code: number; character: string }[] = [];
     for (let v of data.values()) {
         array.push({ code: v, character: String.fromCharCode(v) });
     }
     console.table(array);
-}
+};

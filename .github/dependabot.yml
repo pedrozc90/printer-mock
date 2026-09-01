@@ -5,21 +5,21 @@
 
 version: 2
 updates:
-  # enable version updates for npm
-  - package-ecosystem: "npm"
-    # look for `package.json` and `lock` files in the `root` directory
-    directory: "/"
-    target-branch: "master"
-    schedule:
-      interval: "monthly"
-      timezone: "America/Sao_Paulo"
-    commit-message:
-      # Prefix all commit messages with "[npm]: "
-      prefix: "[npm]"
-    groups:
-      packages:
-        patterns:
-          - "*"
-        update-types:
-          - "minor"
-          - "patch"
+    # enable version updates for npm
+    - package-ecosystem: "npm"
+      # look for `package.json` and `lock` files in the `root` directory
+      directory: "/"
+      target-branch: "master"
+      schedule:
+          interval: "monthly"
+          timezone: "America/Sao_Paulo"
+      commit-message:
+          # Prefix all commit messages with "[npm]: "
+          prefix: "[npm]"
+      groups:
+          packages:
+              patterns:
+                  - "*"
+              update-types:
+                  - "minor"
+                  - "patch"

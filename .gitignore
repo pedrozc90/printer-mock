@@ -1,5 +1,7 @@
-# npm packages
+# NPM
 node_modules
 dist
-logs/*
-epcs/*
+
+# Files
+logs
+epcs

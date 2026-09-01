@@ -1,4 +1,4 @@
-export * from "./utils";
-export * from "./ascii";
-export * from "./string";
-export * as BufferUtils from "./buffer";
+export * from "./utils.ts";
+export * from "./ascii.ts";
+export * from "./string.ts";
+export * as BufferUtils from "./buffer.ts";

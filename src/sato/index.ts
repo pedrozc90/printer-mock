@@ -1,2 +1,2 @@
-export * from "./sato";
-export * from "./enums";
+export * as Sato from "./sato.ts";
+export * from "./enums.ts";

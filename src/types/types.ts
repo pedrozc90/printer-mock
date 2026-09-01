@@ -9,15 +9,6 @@ export interface ServerError extends Error {
     port?: number;
 }
 
-export interface Tag {
-    epc: string | null;
-    size: string | null;
-    size_es?: string | null;
-    description: string | null;
-    description_es?: string | null;
-    sku: string | null;
-}
-
 export interface ReceivedData {
     content: string;
     epcs?: string[];
