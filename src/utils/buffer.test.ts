@@ -1,7 +1,29 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { parse, print, sanitize, splitFrames } from "./buffer.ts";
+import { sanitize, splitFrames } from "./buffer.ts";
+
+/** Decodes each frame Buffer the way handleData does, for readable assertions. */
+const decode = (frames: Buffer[]): string[] => frames.map((f) => f.toString("utf8"));
+
+// ---- helpers to build Java ObjectOutputStream-shaped buffers ----------
+
+const STREAM_HEADER = Buffer.from([0xac, 0xed, 0x00, 0x05]);
+
+/** Encodes a string the way ObjectOutputStream#writeObject(String) does
+ *  for short strings: TC_STRING (0x74) + u16 length + raw bytes. */
+const tcString = (str: string): Buffer => {
+    const body = Buffer.from(str, "utf8");
+    const header = Buffer.alloc(3);
+    header[0] = 0x74; // TC_STRING
+    header.writeUInt16BE(body.length, 1);
+    return Buffer.concat([header, body]);
+};
+
+/** Builds a full "one send() call" payload: header + TC_STRING block. */
+const javaSend = (str: string): Buffer => {
+    return Buffer.concat([STREAM_HEADER, tcString(str)]);
+};
 
 describe("splitFrames", () => {
     // \x02\x12PH\x03
@@ -10,7 +32,7 @@ describe("splitFrames", () => {
     it("returns a complete frame with no leftover", () => {
         const { frames, rest } = splitFrames(Buffer.from(PH_FRAME));
 
-        assert.deepEqual(frames, ["\x02\x12PH\x03"]);
+        assert.deepEqual(decode(frames), ["\x02\x12PH\x03"]);
         assert.equal(rest.length, 0);
     });
 
@@ -20,68 +42,33 @@ describe("splitFrames", () => {
         assert.deepEqual(first.rest, Buffer.from(PH_FRAME.slice(0, 3)));
 
         const second = splitFrames(Buffer.concat([first.rest, Buffer.from(PH_FRAME.slice(3))]));
-        assert.deepEqual(second.frames, ["\x02\x12PH\x03"]);
+        assert.deepEqual(decode(second.frames), ["\x02\x12PH\x03"]);
         assert.equal(second.rest.length, 0);
     });
 
     it("keeps trailing bytes after the last complete frame", () => {
         const { frames, rest } = splitFrames(Buffer.from([...PH_FRAME, ...PH_FRAME.slice(0, 3)]));
 
-        assert.deepEqual(frames, ["\x02\x12PH\x03"]);
+        assert.deepEqual(decode(frames), ["\x02\x12PH\x03"]);
         assert.deepEqual(rest, Buffer.from(PH_FRAME.slice(0, 3)));
     });
-});
 
-describe("parse", () => {
-    it("pkpg cmd", () => {
-        const data: Buffer = Buffer.from([
-            172, 237, 0, 5, 116, 0, 3, 18, 80, 71, 172, 237, 0, 5, 116, 0, 3, 18, 80, 75, 172, 237, 0, 5, 116, 0, 1, 3,
-        ]);
+    it("skips an empty frame (bare STX+ETX)", () => {
+        const { frames, rest } = splitFrames(Buffer.from([2, 3]));
 
-        print(data);
-
-        const results: string[] = parse(data);
-
-        assert.deepEqual(results, ["\x02\x12PG\x03", "\x02\x12PK\x03"]);
+        assert.deepEqual(frames, []);
+        assert.equal(rest.length, 0);
     });
 
-    it("ph cmd", () => {
-        const data: Buffer = Buffer.from([172, 237, 0, 5, 116, 0, 3, 18, 80, 72, 172, 237, 0, 5, 116, 0, 1, 3]);
+    it("skips an empty frame preceding a real one", () => {
+        const { frames, rest } = splitFrames(Buffer.from([2, 3, ...PH_FRAME]));
 
-        print(data);
-
-        const results: string[] = parse(data);
-
-        assert.deepEqual(results, ["\x02\x12PH\x03"]);
-    });
-
-    it("ph cmd - inline", () => {
-        const data: Buffer = Buffer.from([116, 0, 5, 2, 18, 80, 72, 3]);
-        const results: string[] = parse(data);
-        assert.deepEqual(results, ["\x02\x12PH\x03"]);
+        assert.deepEqual(decode(frames), ["\x02\x12PH\x03"]);
+        assert.equal(rest.length, 0);
     });
 });
 
 describe("sanitize", () => {
-    // ---- helpers to build Java ObjectOutputStream-shaped buffers ----------
-
-    const STREAM_HEADER = Buffer.from([0xac, 0xed, 0x00, 0x05]);
-
-    /** Encodes a string the way ObjectOutputStream#writeObject(String) does
-     *  for short strings: TC_STRING (0x74) + u16 length + raw bytes. */
-    const tcString = (str: string): Buffer => {
-        const body = Buffer.from(str, "utf8");
-        const header = Buffer.alloc(3);
-        header[0] = 0x74; // TC_STRING
-        header.writeUInt16BE(body.length, 1);
-        return Buffer.concat([header, body]);
-    };
-
-    /** Builds a full "one send() call" payload: header + TC_STRING block. */
-    const javaSend = (str: string): Buffer => {
-        return Buffer.concat([STREAM_HEADER, tcString(str)]);
-    };
-
     /* --- Usage --- */
     describe("sanitize — basic usage", () => {
         it("recovers the original string from a single send() payload", () => {
@@ -102,53 +89,43 @@ describe("sanitize", () => {
         });
     });
 
-    /* --- Cases where sanitize() does NOT do what you might expect --- */
-    describe("sanitize — known limitations / failure cases", () => {
-        it("only recovers the FIRST message when several send() calls are concatenated", () => {
-            // This mirrors PrinterConnection.send() being called twice in a row:
-            // each call creates a brand-new ObjectOutputStream, so a SECOND
-            // stream header gets written mid-stream. That header byte sequence
-            // is not a valid TC_* tag, so parsing stops there.
+    /* --- Partial / unrecognized input is forwarded verbatim, not dropped --- */
+    describe("sanitize — partial / unrecognized input is forwarded, not dropped", () => {
+        it("unwraps the first message and forwards the rest of the stream verbatim", () => {
+            // Mirrors PrinterConnection.send() being called twice in a row: each call creates a
+            // brand-new ObjectOutputStream, so a SECOND stream header lands mid-stream. 0xAC is
+            // not a TC_* tag, so sanitize() stops structural parsing there — but now forwards the
+            // remaining bytes so a downstream STX/ETX split can still recover a frame from them.
             const raw = Buffer.concat([javaSend("FIRST"), javaSend("SECOND")]);
 
             const result = sanitize(raw);
 
-            // What you'd probably want:
-            // assert.equal(result.toString("utf8"), "FIRSTSECOND");
-            //
-            // What actually happens: parsing stops at the second AC ED header
-            // because 0xAC is not TC_STRING (0x74) or TC_LONGSTRING (0x7C).
-            assert.equal(result.toString("utf8"), "FIRST");
-            assert.notEqual(result.toString("utf8"), "FIRSTSECOND");
+            assert.equal(result.subarray(0, 5).toString("utf8"), "FIRST");
+            assert.deepEqual(result.subarray(5), Buffer.concat([STREAM_HEADER, tcString("SECOND")]));
         });
 
-        it("returns an empty buffer for a real serialized object (not a bare String)", () => {
-            // A genuine object graph starts with TC_OBJECT (0x73) plus class
-            // descriptor bytes, not TC_STRING. sanitize() has no idea how to
-            // walk that structure, so it bails out immediately with nothing.
-            const fakeObjectPayload = Buffer.concat([
+        it("forwards an unrecognized marker (e.g. a real object graph) untouched", () => {
+            // A genuine object graph starts with TC_OBJECT (0x73) + class descriptor bytes, not
+            // TC_STRING. sanitize() can't walk that; it forwards the bytes and lets splitFrames()
+            // ignore them (they contain no STX/ETX frame).
+            const raw = Buffer.concat([
                 STREAM_HEADER,
                 Buffer.from([0x73, 0x00, 0x00]), // TC_OBJECT + junk, not a real object
             ]);
 
-            const result = sanitize(fakeObjectPayload);
-
-            assert.equal(result.length, 0);
+            assert.deepEqual(sanitize(raw), Buffer.from([0x73, 0x00, 0x00]));
         });
 
-        it("silently drops trailing bytes if the declared string length is truncated", () => {
-            // Corrupt/partial capture: header says length 10 but only 3 bytes follow.
+        it("keeps a truncated record so the next chunk can complete it", () => {
+            // Header says length 10 but only 3 bytes follow (record cut by a packet boundary).
             const header = Buffer.alloc(3);
             header[0] = 0x74; // TC_STRING
             header.writeUInt16BE(10, 1); // claims 10 bytes...
             const raw = Buffer.concat([STREAM_HEADER, header, Buffer.from("abc")]); // ...only 3 given
 
-            const result = sanitize(raw);
-
-            // It does NOT throw and does NOT return the partial "abc" — the
-            // bounds check rejects the whole (truncated) block and returns
-            // whatever was collected before it, i.e. nothing here.
-            assert.equal(result.length, 0);
+            // The truncated record (tag + declared length + partial payload) is forwarded whole,
+            // for the caller's leftover buffer to complete with the next chunk.
+            assert.deepEqual(sanitize(raw), Buffer.from([0x74, 0x00, 0x0a, 0x61, 0x62, 0x63]));
         });
 
         it("does not decode Java's 'modified UTF-8', so embedded NUL bytes round-trip incorrectly", () => {
@@ -164,5 +141,65 @@ describe("sanitize", () => {
             // bytes as standard UTF-8 instead produces "A" + U+0080, which is wrong.
             assert.notEqual(result.toString("utf8"), "A\u0000");
         });
+    });
+});
+
+describe("sanitize + splitFrames (handleData decoding)", () => {
+    it("recovers a Java-wrapped frame with no leftover", () => {
+        const payload = javaSend("\x02\x12PG\x12PK\x03");
+        const buffer = sanitize(payload);
+        const { frames, rest } = splitFrames(buffer);
+
+        assert.deepEqual(decode(frames), ["\x02\x12PG\x12PK\x03"]);
+        assert.equal(rest.length, 0);
+    });
+
+    it("unwraps a bare TC_STRING record with no stream header", () => {
+        const data = Buffer.from([116, 0, 5, 2, 18, 80, 72, 3]); // TC_STRING, len 5, \x02\x12PH\x03
+
+        assert.deepEqual(decode(splitFrames(sanitize(data)).frames), ["\x02\x12PH\x03"]);
+    });
+
+    it("recovers a large Java-wrapped frame at a realistic SBPL body size", () => {
+        // One STX...ETX frame around ~2KB of filler, wrapped exactly as PrinterConnection.send()
+        // does: [AC ED 00 05] + TC_STRING(0x74) + u16 length + payload. The length's big-endian
+        // bytes (2002 = 0x07D2) don't collide with STX(0x02)/ETX(0x03), isolating "stays correct
+        // at a realistic large size" from length-prefix collision concerns.
+        const bodySize = 2000;
+        const innerFrame = `\x02${"A".repeat(bodySize)}\x03`;
+        const payload = Buffer.from(innerFrame, "utf8");
+        assert.equal(payload.length, bodySize + 2);
+
+        const header = Buffer.alloc(3);
+        header[0] = 0x74; // TC_STRING
+        header.writeUInt16BE(payload.length, 1);
+
+        const raw = Buffer.concat([Buffer.from([0xac, 0xed, 0x00, 0x05]), header, payload]);
+
+        assert.deepEqual(decode(splitFrames(sanitize(raw)).frames), [innerFrame]);
+    });
+
+    it("reassembles a Java record split mid-payload across two chunks", () => {
+        // length 3002 = 0x0BBA — no length byte collides with STX/ETX/TC_STRING/TC_LONGSTRING.
+        const body = `\x02${"A".repeat(3000)}\x03`;
+        const wire = javaSend(body);
+        const cut = 12; // inside the TC_STRING payload
+
+        // mirrors handleData: sanitize each chunk, prepend the previous rest, never re-sanitize it
+        const first = splitFrames(sanitize(wire.subarray(0, cut)));
+        assert.deepEqual(first.frames, []);
+
+        const combined = Buffer.concat([first.rest, sanitize(wire.subarray(cut))]);
+        const second = splitFrames(combined);
+
+        assert.deepEqual(decode(second.frames), [body]);
+        assert.equal(second.rest.length, 0);
+    });
+
+    it("passes a raw STX...ETX frame through untouched (sanitize is a no-op)", () => {
+        const raw = Buffer.from("\x02\x12PH\x03", "latin1");
+
+        assert.deepEqual(sanitize(raw), raw);
+        assert.deepEqual(decode(splitFrames(sanitize(raw)).frames), ["\x02\x12PH\x03"]);
     });
 });

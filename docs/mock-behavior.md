@@ -40,7 +40,7 @@ Its printing flow is:
 ### Commands
 
 |   Name    | Command send via socket          |
-|:---------:|:---------------------------------|
+| :-------: | :------------------------------- |
 | `PG + PK` | `"\u0002\u0012PG\u0012PK\u0003"` |
 |   `PH`    | `"\u0002\u0012PH\u0003"`         |
 |   `DLE`   | `"\u0002\u0010H\u0003"`          |
@@ -76,15 +76,26 @@ Because TCP does not preserve application-level message boundaries, a single SBP
 
 The mock therefore:
 
-1. Accumulates received bytes.
-2. Identifies complete frames from `STX` through `ETX`.
-3. Processes only complete frames.
-4. Keeps incomplete data until the remaining bytes arrive.
-5. If the held incomplete data exceeds a bounded size (about 1 MB), it is discarded and a warning
+1. Unwraps the Java `ObjectOutputStream` framing the client puts around each message
+   (`AC ED 00 05` stream header + a `TC_STRING`/`TC_LONGSTRING` record — see
+   `printer-protocol.md`). Already-unframed bytes pass through unchanged. Framing that cannot be
+   decoded — an unknown record type, or a record cut short by a TCP packet boundary — is forwarded
+   as-is, never dropped, so a message split across packets is still recovered once the remaining
+   bytes arrive.
+2. Accumulates received bytes.
+3. Identifies complete frames from `STX` through `ETX`. Bytes outside a frame are ignored, and a
+   bare `STX` immediately followed by `ETX` (an empty frame) is skipped.
+4. Processes only complete frames.
+5. Keeps incomplete data until the remaining bytes arrive.
+6. If the held incomplete data exceeds a bounded size (about 1 MB), it is discarded and a warning
    is logged, rather than growing without limit — this only matters for a malformed or truncated
    stream, since well-formed frames are always far smaller.
 
 A complete frame is delimited by `STX ... ETX`.
+
+If several `ObjectOutputStream` sends arrive coalesced in one read, only the first record is
+unwrapped structurally; the rest is forwarded raw and is still recovered as long as it contains a
+clean `STX ... ETX` frame (leftover framing bytes fall outside the frame and are ignored).
 
 A single frame may contain more than one command (e.g. `DC2 + PG` followed by `DC2 + PK`, as the
 Java client always sends them). Each command in the frame is processed independently, in order,
@@ -106,16 +117,16 @@ For every complete **print block**:
 1. If the block contains a line starting with `ESC + PM`, set `paused = false`. `ESC + PM` is
    expected only once, in the SBPL label header — this marks the start of a new printing process.
 2. For each line starting with `ESC + IP0`:
-   1. If the line has no `epc:` parameter, skip it — no other `ESC + IP0` parameter matters to
-      the mock.
-   2. Otherwise, extract the EPC from the `epc:` parameter, generate a random TID
-      (`src/utils/utils.ts` `generateTID(12)`) — fixed for this EPC; the same TID is returned by
-      every `DC2 + PK` reply for this EPC, including repeated polls — and add the EPC/TID pair to
-      the **printer buffer**.
-   3. Extracting an EPC also sets `paused = false`, same as `ESC + PM`. This is a deliberate,
-      redundant safety net alongside `DC2 + PH` (which already resets `paused` before every new
-      SBPL job per the client flow) and `ESC + PM` (not guaranteed to be present or detected) —
-      the first EPC of a new job is a third, independent trigger for the same reset.
+    1. If the line has no `epc:` parameter, skip it — no other `ESC + IP0` parameter matters to
+       the mock.
+    2. Otherwise, extract the EPC from the `epc:` parameter, generate a random TID
+       (`src/utils/utils.ts` `generateTID(12)`) — fixed for this EPC; the same TID is returned by
+       every `DC2 + PK` reply for this EPC, including repeated polls — and add the EPC/TID pair to
+       the **printer buffer**.
+    3. Extracting an EPC also sets `paused = false`, same as `ESC + PM`. This is a deliberate,
+       redundant safety net alongside `DC2 + PH` (which already resets `paused` before every new
+       SBPL job per the client flow) and `ESC + PM` (not guaranteed to be present or detected) —
+       the first EPC of a new job is a third, independent trigger for the same reset.
 3. A block with neither `ESC + PM` nor a usable `ESC + IP0` is skipped — nothing is added to the
    buffer and `paused` is left unchanged.
 
@@ -152,12 +163,12 @@ When paused, PG must return `WAITING`
 When the mock receives a `DLE` command:
 
 1. If `paused` is `false`
-   1. Set `paused = true`
-   2. Wait ~500 ms.
-   3. Reply with `ACK` (no `STX ... ETX` frame).
+    1. Set `paused = true`
+    2. Wait ~500 ms.
+    3. Reply with `ACK` (no `STX ... ETX` frame).
 2. If `paused` is already `true`
-   1. Wait ~500 ms.
-   2. Reply `NAK` (no `STX ... ETX` frame).
+    1. Wait ~500 ms.
+    2. Reply `NAK` (no `STX ... ETX` frame).
 
 The printer remains paused until a `DC1` command is received.
 The printer reply to `PG` with `PrinterStatus.WAITING` while `paused == true`.
@@ -192,12 +203,12 @@ The mock must:
 2. Clear the **last printed EPC/TID**. Subsequent `DC2 + PK` requests return the empty/no-result
    condition until a new tag finishes printing.
 3. Reset printing state to `STANDBY`:
-   - Abort any in-progress `ANALYSING`/`PRINTING` cycle.
-   - Set `paused = false`.
+    - Abort any in-progress `ANALYSING`/`PRINTING` cycle.
+    - Set `paused = false`.
 4. Reply `ACK` (no `STX ... ETX` frame)
-   - It can possibly reply `ACK` or `NAK`;
-   - However, since we don't know how it really works, lets always reply `ACK` (successfully cancelled).
-   - has a ~500 ms delay
+    - It can possibly reply `ACK` or `NAK`;
+    - However, since we don't know how it really works, lets always reply `ACK` (successfully cancelled).
+    - has a ~500 ms delay
 
 ---
 
@@ -210,7 +221,7 @@ Never reply `NAK`.
 The response contains:
 
 | Field           | Mock behavior                                                                             |
-|:----------------|:------------------------------------------------------------------------------------------|
+| :-------------- | :---------------------------------------------------------------------------------------- |
 | `PrinterStatus` | During printing process `STANDBY`, `ANALYSING` or `PRINTING`; `WAITING` only while paused |
 | `BufferStatus`  | Always `BUFFER_AVAILABLE` — the mock has no real capacity limit to simulate               |
 | `RibbonStatus`  | Always `RIBBON_PRESENT`                                                                   |
@@ -266,12 +277,12 @@ The mock should:
 1. If no tag has finished printing since the current print job started (or since the last
    `DC2 + PH`), reply with the empty/no-result condition: `13,0,A,EP:,ID:[CR][LF]`.
 2. Otherwise, reply with the **last printed EPC/TID**, e.g.:
-   - EPC `E0123456789ABCDEF0123456`
-   - TID `E2A41B7C93D02F184A65B901`
-   1. Build reply like `1,N,EP:E0123456789ABCDEF0123456,ID:E2A41B7C93D02F184A65B901[CR][LF]`;
-   2. Calculate the number of bytes (include `CR` and `LF`);
-   3. Reply `61,1,N,EP:E0123456789ABCDEF0123456,ID:E2A41B7C93D02F184A65B901[CR][LF]`; `61,` is the
-      number of bytes calculated in the previous step.
+    - EPC `E0123456789ABCDEF0123456`
+    - TID `E2A41B7C93D02F184A65B901`
+    1. Build reply like `1,N,EP:E0123456789ABCDEF0123456,ID:E2A41B7C93D02F184A65B901[CR][LF]`;
+    2. Calculate the number of bytes (include `CR` and `LF`);
+    3. Reply `61,1,N,EP:E0123456789ABCDEF0123456,ID:E2A41B7C93D02F184A65B901[CR][LF]`; `61,` is the
+       number of bytes calculated in the previous step.
 
 The Java application stores the returned EPC in a `Set<String>` — duplicates across polls are
 expected and are deduplicated on the client side, not by the mock.

@@ -10,6 +10,14 @@ export const toInt = (value: string | number | undefined): number | undefined =>
     return undefined;
 };
 
+/**
+ * Converts a control-byte/char-code constant (e.g. `STX`, `ESC`) into its one-character string form.
+ *
+ * @param code - character numeric code
+ * @returns string representation of that character code.
+ */
+export const toChar = (code: number): string => String.fromCharCode(code);
+
 export const resolvePort = (value: string | undefined, fallback: number = 3000): number => {
     if (value === undefined) return fallback;
 

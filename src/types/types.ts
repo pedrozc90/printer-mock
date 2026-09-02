@@ -12,8 +12,3 @@ export interface ServerError extends Error {
     address?: string;
     port?: number;
 }
-
-export interface ReceivedData {
-    content: string;
-    epcs?: string[];
-}

@@ -2,7 +2,7 @@ export const PrinterStatus = {
     STANDBY: 0, // waiting for receiving data
     WAITING: 1, // waiting for dispensing
     ANALYSING: 2,
-    PRITING: 3,
+    PRINTING: 3,
     OFFLINE: 4,
     ERROR: 5,
 } as const;

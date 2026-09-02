@@ -170,8 +170,8 @@ Control bytes used below:
 
 - The combination of `DC2 + PG + DC2 + PK` commands is possible;
   Process like two commands;
-  - `DC2 + PG` reply normally with a frame `STX` + `32,PS0,…,Q000000` + `ETX`;
-  - `DC2 + PK` reply normally with a frame `STX` + `<bytes>,1,N,EP:<24 hex>,ID:<24 hex>` + `CR` + `LF` + `ETX`.
+    - `DC2 + PG` reply normally with a frame `STX` + `32,PS0,…,Q000000` + `ETX`;
+    - `DC2 + PK` reply normally with a frame `STX` + `<bytes>,1,N,EP:<24 hex>,ID:<24 hex>` + `CR` + `LF` + `ETX`.
 - The `PG` block `32,PS0,RS0,RE0,PE0,EN00,BT0,Q000000` is 35 chars;
   the prefix `32` is the length after the first comma;
   consistent with the SATO `PG` documentation.
@@ -207,6 +207,9 @@ Control bytes used below:
     - Those captured buffers use an **older** framing that split `PKPG` into four serialized
       strings (`"\x02"`, `"\x12PG"`, `"\x12PK"`, `"\x03"`); the user states the current code sends
       one string.
+    - The mock unwraps this framing structurally (`sanitize` in `src/utils/buffer.ts`): stream
+      header + one `TC_STRING`/`TC_LONGSTRING` record per send. It no longer special-cases the
+      older four-`writeObject` framing.
 
 - Command byte sequences sent by the current app. The app wraps each DC2/DLE/DC1
   command in `STX ... ETX`, unlike the bare form in the SATO docs:
