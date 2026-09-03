@@ -13,14 +13,14 @@ jobs:
         steps:
             - name: Dependabot Metadata
               id: dependabot-metadata
-              uses: dependabot/fetch-metadata@v1
+              uses: dependabot/fetch-metadata@v2
               with:
                   alert-lookup: true
                   compat-lookup: true
                   github-token: "${{ secrets.GITHUB_TOKEN }}"
 
             - name: Checkout
-              uses: actions/checkout@v4
+              uses: actions/checkout@v7
 
             - name: Enable auto-merge for Dependabot PRs
               run: gh pr merge --auto --merge "$PR_URL"

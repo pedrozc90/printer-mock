@@ -13,9 +13,17 @@ updates:
       schedule:
           interval: "monthly"
           timezone: "America/Sao_Paulo"
+      # only ever keep one open Dependabot PR at a time
+      open-pull-requests-limit: 1
       commit-message:
           # Prefix all commit messages with "[npm]: "
           prefix: "[npm]"
+      # wait until a release has been public for N days before proposing it
+      cooldown:
+          default-days: 30
+          semver-major-days: 90
+          semver-minor-days: 30
+          semver-patch-days: 7
       groups:
           packages:
               patterns:
@@ -23,3 +31,9 @@ updates:
               update-types:
                   - "minor"
                   - "patch"
+      ignore:
+          # disable all major version updates; `@types/node` must track the Node
+          # line pinned in `mise.toml`, and major bumps are risky for a repo that
+          # is not actively maintained. Security updates can still bump a major.
+          - dependency-name: "*"
+            update-types: ["version-update:semver-major"]
