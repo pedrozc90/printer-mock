@@ -1,5 +1,5 @@
 import { Socket } from "net";
-import { settings } from "./config/index.ts";
+import { logger, settings } from "./config/index.ts";
 import { createApp } from "./app.ts";
 
 const { port } = settings;
@@ -12,16 +12,16 @@ server.on("listening", () => {
     if (!server.listening) return;
 
     const addr = server.address();
-    console.log("Address:", addr);
+    logger.info("Address:", addr);
 
     const bind = addr ? (typeof addr === "string" ? `Pipe ${addr}` : `http://${addr.address}:${addr.port}`) : null;
 
-    console.log("----------------------------------------------------------------------");
-    console.log(`Application running on ${bind}`);
-    console.log("To shut it down, press CTRL + C at any time.");
-    console.log("----------------------------------------------------------------------");
-    console.log(`Process PID: ${process.pid}`);
-    console.log("----------------------------------------------------------------------");
+    logger.info("----------------------------------------------------------------------");
+    logger.info(`Application running on ${bind}`);
+    logger.info("To shut it down, press CTRL + C at any time.");
+    logger.info("----------------------------------------------------------------------");
+    logger.info(`Process PID: ${process.pid}`);
+    logger.info("----------------------------------------------------------------------");
 });
 
 server.on("error", (error: Error) => {
@@ -36,11 +36,11 @@ server.on("error", (error: Error) => {
     // handle specific listen errors with friendly messages
     switch (code) {
         case "EACCES": {
-            console.error(bind + " requires elevated privileges");
+            logger.error(bind + " requires elevated privileges");
             return process.exit(1);
         }
         case "EADDRINUSE": {
-            console.error(bind + " is already in use");
+            logger.error(bind + " is already in use");
             return process.exit(1);
         }
         default:
@@ -63,10 +63,10 @@ const shutdown = async (signal: string): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
 
-    console.log(`${signal} received. Shutting down gracefully...`);
+    logger.info(`${signal} received. Shutting down gracefully...`);
 
     const forceExitTimer = setTimeout(() => {
-        console.log("Graceful shutdown timed out. Forcing exit.");
+        logger.warn("Graceful shutdown timed out. Forcing exit.");
         process.exit(1);
     }, 10_000);
 
@@ -78,10 +78,10 @@ const shutdown = async (signal: string): Promise<void> => {
             socket?.destroy();
         });
 
-        console.log("Shutdown complete");
+        logger.info("Shutdown complete");
         process.exit(0);
     } catch (e) {
-        console.error("Error during shutdown:", e);
+        logger.error("Error during shutdown", e);
         process.exit(1);
     }
 };

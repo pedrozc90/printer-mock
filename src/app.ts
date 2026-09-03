@@ -2,6 +2,7 @@ import { createServer, Server, Socket } from "net";
 
 import { ACK, NAK, sanitize, splitFrames } from "./utils/index.ts";
 import { Sato } from "./printers/index.ts";
+import { logger } from "./config/index.ts";
 
 // cap on unterminated bytes held between data events before they are discarded
 const MAX_LEFTOVER: number = 1_000_000;
@@ -14,7 +15,7 @@ export const createApp = (): Server => {
 
     const server: Server = createServer((socket: Socket) => {
         // socket connection event
-        console.log("client connected!");
+        logger.info("client connected");
 
         // bytes received but not yet terminated by ETX, carried into the next chunk
         let leftover: Buffer = Buffer.alloc(0);
@@ -25,14 +26,23 @@ export const createApp = (): Server => {
             const now = Date.now();
 
             const content = frame.toString("utf8");
+            // logger.info(`Processing frame '${content}'`, frame)
+
             const commands: Sato.Command[] = Sato.tokenizeCommands(content);
+
+            // remember the last-printed tag so we can log below whenever handling this frame
+            // advances the cycle far enough to finish a new one (PG and PK both advance it, so
+            // the check has to span the whole frame, not a single command)
+            const printedBefore = state.lastPrinted?.epc;
 
             if (commands.length === 0) {
                 // not a recognized command frame: treat it as SBPL data. No reply is sent for
                 // SBPL frames — neither spec documents one, and the Java client doesn't wait for
                 // one between sending the file and starting its PG+PK poll loop.
+                const queuedBefore = state.queue.length;
                 state = Sato.ingestSbplFrame(state, content, now);
-                return;
+                const queued = state.queue.length - queuedBefore;
+                if (queued > 0) logger.info(`SBPL print job: ${queued} tag(s) queued (queue=${state.queue.length})`);
             }
 
             for (const command of commands) {
@@ -51,22 +61,29 @@ export const createApp = (): Server => {
                     }
                     case "PH": {
                         state = Sato.clearForCancel(state);
+                        logger.info("DC2+PH cancel - print buffer and last-printed cleared");
                         await Sato.sendBare(socket, ACK);
                         break;
                     }
                     case "PAUSE": {
                         const wasPaused = state.paused;
                         state = Sato.setPaused(state, true, now);
+                        logger.info(`DLE pause -> ${wasPaused ? "NAK (already paused)" : "ACK"}`);
                         await Sato.sendBare(socket, wasPaused ? NAK : ACK);
                         break;
                     }
                     case "RESUME": {
                         const wasPaused = state.paused;
                         state = Sato.setPaused(state, false, now);
+                        logger.info(`DC1 resume -> ${wasPaused ? "ACK" : "NAK (not paused)"}`);
                         await Sato.sendBare(socket, wasPaused ? ACK : NAK);
                         break;
                     }
                 }
+            }
+
+            if (state.lastPrinted && state.lastPrinted.epc !== printedBefore) {
+                logger.info(`printed EPC ${state.lastPrinted.epc} (TID ${state.lastPrinted.tid})`);
             }
         };
 
@@ -80,11 +97,13 @@ export const createApp = (): Server => {
 
             const { frames, rest } = splitFrames(combined);
             if (rest.length > MAX_LEFTOVER) {
-                console.warn("discarding unterminated data: exceeded leftover limit");
+                logger.warn("discarding unterminated data: exceeded leftover limit");
                 leftover = Buffer.alloc(0);
             } else {
                 leftover = rest;
             }
+
+            // logger.info("Frames", frames);
 
             for (const frame of frames) {
                 await handleFrame(frame);
@@ -92,28 +111,30 @@ export const createApp = (): Server => {
         };
 
         socket.on("data", (data: Buffer) => {
-            queue = queue.then(() => handleData(data)).catch((err: unknown) => console.error("error handling data:", err));
+            logger.info("Received", data);
+            queue = queue.then(() => handleData(data)).catch((err: unknown) => logger.error("error handling data", err));
         });
 
         socket.on("ready", () => {
-            console.log("connection is ready!");
+            logger.info("connection ready");
         });
 
         socket.on("timeout", () => {
-            console.warn("socket timeout");
+            logger.warn("socket timeout - closing connection");
             socket.end();
         });
 
         socket.on("end", () => {
-            console.log("client disconnected.");
+            logger.info("client disconnected");
         });
 
         socket.on("close", (had_error: boolean) => {
-            console.log(had_error ? "socket was closed due to a transmission error." : "socket successfully closed.");
+            if (had_error) logger.warn("socket was closed due to a transmission error");
+            else logger.info("socket successfully closed");
         });
 
         socket.on("error", (err: Error) => {
-            console.error(`${err.name}: ${err.message}`, err.stack);
+            logger.error(err);
         });
     });
 
@@ -121,7 +142,7 @@ export const createApp = (): Server => {
     server.maxConnections = 1;
 
     // server events
-    server.on("close", () => console.log("Server connection closed!"));
+    server.on("close", () => logger.info("server closed"));
 
     return server;
 };
